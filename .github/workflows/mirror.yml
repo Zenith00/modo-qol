@@ -20,4 +20,4 @@ jobs:
         source_repo: "https://gitlab.com/tposney/midi-qol.git"
         source_branch: "master"
         destination_branch: "upstream"
-        github_token: ${{ secrets.GITHUB_TOKEN  }}
+        github_token: ${{ secrets.GIT_AT  }}
