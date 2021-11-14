@@ -1,0 +1,21 @@
+name: "release-releaser"
+
+on:
+  push:
+    branches:
+      - "master"
+
+jobs:
+  release-release:
+    name: "Release Release"
+    runs-on: "ubuntu-latest"
+
+    steps:
+      - uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GIT_AT }}"
+          automatic_release_tag: "latest"
+          prerelease: False
+          title: "Latest"
+          files: |
+            *
