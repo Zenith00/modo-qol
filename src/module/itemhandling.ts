@@ -147,14 +147,7 @@ export async function doDamageRoll(wrapped, { event = {}, spellLevel = null, pow
     // allow damage roll to go ahead if it's an ordinary roll
     workflow.currentState = WORKFLOWSTATES.WAITFORDAMAGEROLL;
   }
-  if (workflow.currentState !== WORKFLOWSTATES.WAITFORDAMAGEROLL) {
-    switch (workflow?.currentState) {
-      case WORKFLOWSTATES.AWAITTEMPLATE:
-        return ui.notifications?.warn(i18n("midi-qol.noTemplateSeen"));
-      case WORKFLOWSTATES.WAITFORATTACKROLL:
-        return ui.notifications?.warn(i18n("midi-qol.noAttackRoll"));
-    }
-  }
+
 
   if (workflow.damageRoll) { // we are re-rolling the damage. redisplay the item card but remove the damage
     let chatMessage = game.messages?.get(workflow.itemCardId ?? "");
