@@ -1,6 +1,6 @@
 import { criticalDamage, itemDeleteCheck, nsaFlag, coloredBorders, autoFastForwardAbilityRolls, importSettingsFromJSON, exportSettingsToJSON } from "../settings.js"
  import { configSettings } from "../settings.js"
-import { warn, i18n, error, debug, gameStats, debugEnabled } from "../../midi-qol.js";
+import { warn, i18n, error, debug, gameStats, debugEnabled, geti18nOptions } from "../../midi-qol.js";
 import { installedModules } from "../setupModules.js";
 export class ConfigPanel extends FormApplication {
   
@@ -21,41 +21,41 @@ export class ConfigPanel extends FormApplication {
     return i18n("midi-qol.ConfigTitle")
   }
   async getData(options: any) : Promise<any> {
-    let wallsBlockRangeOptions = i18n("midi-qol.WallsBlockRangeOptions");
-    if (installedModules.get("dnd5e-helpers"))
-      wallsBlockRangeOptions = i18n("midi-qol.WallsBlockRangeOptionsNew");
+    let wallsBlockRangeOptions = geti18nOptions("WallsBlockRangeOptions");
+    if (installedModules.get("dnd5e-helpers")) {
+      wallsBlockRangeOptions = geti18nOptions("WallsBlockRangeOptionsNew");
+    }
 
-//@ts-ignore
     let data = {
       configSettings,
-      speedItemRollsOptions: i18n("midi-qol.speedItemRollsOptions"),
-      autoCheckHitOptions: i18n("midi-qol.autoCheckHitOptions"),
-      clickOptions: i18n("midi-qol.clickOptions"),
-      autoTargetOptions: i18n("midi-qol.autoTargetOptions"),
-      rangeTargetOptions: i18n("midi-qol.rangeTargetOptions"),
-      requiresTargetsOptions: i18n("midi-qol.requiresTargetsOptions"),
-      autoCheckSavesOptions: i18n("midi-qol.autoCheckSavesOptions"),
-      autoRollDamageOptions: i18n("midi-qol.autoRollDamageOptions"),
-      removeButtonsOptions: i18n("midi-qol.removeButtonsOptions"),
+      speedItemRollsOptions: geti18nOptions("speedItemRollsOptions"),
+      autoCheckHitOptions: geti18nOptions("autoCheckHitOptions"),
+      clickOptions: geti18nOptions("clickOptions"),
+      autoTargetOptions: geti18nOptions("autoTargetOptions"),
+      rangeTargetOptions: geti18nOptions("rangeTargetOptions"),
+      requiresTargetsOptions: geti18nOptions("requiresTargetsOptions"),
+      autoCheckSavesOptions: geti18nOptions("autoCheckSavesOptions"),
+      autoRollDamageOptions: geti18nOptions("autoRollDamageOptions"),
+      removeButtonsOptions: geti18nOptions("removeButtonsOptions"),
       criticalDamage,
-      autoApplyDamageOptions: i18n("midi-qol.autoApplyDamageOptions"),
-      damageImmunitiesOptions: i18n("midi-qol.damageImmunitiesOptions"),
-      showItemDetailsOptions: i18n("midi-qol.showItemDetailsOptions"),
-      doReactionsOptions: i18n("midi-qol.DoReactionsOptions"),
-      gmDoReactionsOptions: i18n("midi-qol.GMDoReactionsOptions"),
-      rollOtherDamageOptions: i18n("midi-qol.RollOtherDamageOptions"),
-      showReactionAttackRollOptions: i18n("midi-qol.ShowReactionAttackRollOptions"),
+      autoApplyDamageOptions: geti18nOptions("autoApplyDamageOptions"),
+      damageImmunitiesOptions: geti18nOptions("damageImmunitiesOptions"),
+      showItemDetailsOptions: geti18nOptions("showItemDetailsOptions"),
+      doReactionsOptions: geti18nOptions("DoReactionsOptions"),
+      gmDoReactionsOptions: geti18nOptions("GMDoReactionsOptions"),
+      rollOtherDamageOptions: geti18nOptions("RollOtherDamageOptions"),
+      showReactionAttackRollOptions: geti18nOptions("ShowReactionAttackRollOptions"),
       wallsBlockRangeOptions,
       //@ts-ignore
       itemTypeLabels: CONFIG.Item.typeLabels,
       hasConvenientEffects: installedModules.get("dfreds-convenient-effects"),
       itemDeleteCheck,
-      hideRollDetailsOptions: i18n("midi-qol.hideRollDetailsOptions"),
+      hideRollDetailsOptions: geti18nOptions("hideRollDetailsOptions"),
       hideRollDetailsHint: i18n("midi-qol.HideRollDetails.HintLong"),
       nsaFlag,
       coloredBorders,
-      playerRollSavesOptions: (autoFastForwardAbilityRolls && false) ? i18n("midi-qol.playerRollSavesOptionsReduced") : i18n("midi-qol.playerRollSavesOptions") ,
-      rollNPCSavesOptions: i18n("midi-qol.rollNPCSavesOptions"),
+      playerRollSavesOptions: (autoFastForwardAbilityRolls && false) ? geti18nOptions("playerRollSavesOptionsReduced") : geti18nOptions("playerRollSavesOptions"),
+      rollNPCSavesOptions: geti18nOptions("rollNPCSavesOptions"),
       //@ts-ignore .map undefined
       customSoundsPlaylistOptions: game.playlists.contents.reduce((acc, e) =>{acc[e.id]= e.name; return acc}, {}) || {},
       //@ts-ignore .sounds

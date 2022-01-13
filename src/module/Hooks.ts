@@ -1,9 +1,12 @@
 import { warn, error, debug, i18n, debugEnabled, overTimeEffectsToDelete } from "../midi-qol.js";
-import { colorChatMessageHandler, diceSoNiceHandler, nsaMessageHandler, hideStuffHandler, chatDamageButtons, mergeCardSoundPlayer, processItemCardCreation, hideRollUpdate, hideRollRender, onChatCardAction, betterRollsButtons, processCreateBetterRollsMessage } from "./chatMesssageHandling.js";
+import { colorChatMessageHandler, diceSoNiceHandler, nsaMessageHandler, hideStuffHandler, chatDamageButtons, mergeCardSoundPlayer, processItemCardCreation, hideRollUpdate, hideRollRender, onChatCardAction, betterRollsButtons, processCreateBetterRollsMessage, processCreateDDBGLMessages, ddbglPendingHook, betterRollsUpdate } from "./chatMesssageHandling.js";
 import { processUndoDamageCard, socketlibSocket } from "./GMAction.js";
-import { untargetDeadTokens, untargetAllTokens, midiCustomEffect, getSelfTarget, MQfromUuid, processOverTime, checkImmunity, getConcentrationEffect } from "./utils.js";
+import { untargetDeadTokens, untargetAllTokens, midiCustomEffect, getSelfTarget, MQfromUuid, processOverTime, checkImmunity, getConcentrationEffect, applyTokenDamage } from "./utils.js";
+import { OnUseMacros, activateMacroListeners } from "./apps/Item.js"
 import { configSettings, dragDropTargeting, useMidiCrit } from "./settings.js";
 import { installedModules } from "./setupModules.js";
+import { preUpdateItemOnUseMacro } from "./patching.js";
+import { isExpressionWithTypeArguments } from "typescript";
 
 export const concentrationCheckItemName = "Concentration Check - Midi QOL";
 export var concentrationCheckItemDisplayName = "Concentration Check";
@@ -31,6 +34,10 @@ export let readyHooks = async () => {
     if (expiredEffects.length > 0) actor?.deleteEmbeddedDocuments("ActiveEffect", expiredEffects.map(ef => ef.id));
   })
 
+  Hooks.on("ddb-game-log.pendingRoll", (data) => {
+    ddbglPendingHook(data);
+  });
+
   // Have to trigger on preUpdate to check the HP before the update occured.
   Hooks.on("updateActor", async (actor, update, diff, user) => {
     //@ts-ignore
@@ -42,14 +49,6 @@ export let readyHooks = async () => {
     if (!hpDiff || hpDiff <= 0) return true;
     // expireRollEffect.bind(actor)("Damaged", ""); - not this simple - need to think about specific damage types
     concentrationCheckItemDisplayName = i18n("midi-qol.concentrationCheckName");
-    let concentrationName;
-    if (installedModules.get("dfreds-convenient-effects")) {
-      concentrationName = i18n("midi-qol.Concentrating");
-    } else if (installedModules.get("combat-utility-belt")) {
-      concentrationName = game.settings.get("combat-utility-belt", "concentratorConditionName");
-    } else {
-      concentrationName = i18n("midi-qol.Concentrating");
-    }
     const concentrationEffect: ActiveEffect | undefined = getConcentrationEffect(actor)
     if (!concentrationEffect) return true;
     if (actor.data.data.attributes.hp.value === 0) {
@@ -91,7 +90,14 @@ export let readyHooks = async () => {
     if (debugEnabled > 1) debug("render message hook ", message.id, message, html, data);
     diceSoNiceHandler(message, html, data);
   })
-
+  Hooks.on("renderActorArmorConfig", (app, html, data) => {
+    if (configSettings.optionalRules.challengeModeArmor) {
+      const ac = data.ac;
+      const element = html.find(".stacked"); // TODO do this better
+      let ARHtml = $(`<div>EC: ${ac.EC}</div><div>AR: ${ac.AR}</div>`);
+      element.append(ARHtml);
+    }
+  });
   Hooks.on("restCompleted", restManager);
 
   Hooks.on("deleteActiveEffect", (...args) => {
@@ -100,11 +106,13 @@ export let readyHooks = async () => {
     //@ts-ignore documentClass
     if (!(effect.parent instanceof CONFIG.Actor.documentClass)) return true;
     const actor = effect.parent;
-    const token = actor.token ? actor.token : actor.getActiveTokens()[0];
+    // const token = actor.token ? actor.token : actor.getActiveTokens()[0];
     const checkConcentration = globalThis.MidiQOL?.configSettings()?.concentrationAutomation;
     if (checkConcentration) {
       /// result = await wrapped(...args);
-      handleRemoveConcentration(effect, [token]);
+      // handleRemoveConcentration(effect, [token]);
+      handleRemoveConcentration(effect);
+
     }
     return true;
   });
@@ -131,10 +139,10 @@ export function restManager(actor, result) {
   if (myExpiredEffects?.length > 0) actor?.deleteEmbeddedDocuments("ActiveEffect", myExpiredEffects);
 }
 
-async function handleRemoveConcentration(effect, tokens) {
-  // TODO fix this to be localised
+// async function handleRemoveConcentration(effect, tokens) {
+async function handleRemoveConcentration(effect) {
   let actor = effect.parent;
-  let concentrationLabel: any = "Concentrating";
+  let concentrationLabel: any = i18n("midi-qol.Concentrating");
   if (installedModules.get("dfreds-convenient-effects")) {
     let concentrationId = "Convenient Effect: Concentrating";
     let statusEffect: any = CONFIG.statusEffects.find(se => se.id === concentrationId);
@@ -142,13 +150,11 @@ async function handleRemoveConcentration(effect, tokens) {
   } else if (installedModules.get("combat-utility-belt")) {
     concentrationLabel = game.settings.get("combat-utility-belt", "concentratorConditionName")
   }
-  // Change this to 
   let isConcentration = effect.data.label === concentrationLabel;
   if (!isConcentration) return false;
 
   // If concentration has expired and times-up installed - leave it to TU.
   if (installedModules.get("times-up")) {
-    const worldTime = game.time.worldTime
     let expired = effect.data.duration?.seconds && (game.time.worldTime - effect.data.duration.startTime) >= effect.data.duration.seconds;
     const duration = effect.duration;
     expired = expired || (duration && duration.remaining <= 0 && duration.type === "turns");
@@ -164,6 +170,10 @@ async function handleRemoveConcentration(effect, tokens) {
         if (template) await template.delete();
       }
     }
+    for (let removeUuid of concentrationData.removeUuids) {
+      const entity = await fromUuid(removeUuid);
+      if (entity) await entity.delete()
+    }
     await socketlibSocket.executeAsGM("deleteItemEffects", { ignore: [effect.uuid], targets: concentrationData.targets, origin: concentrationData.uuid });
   } catch (err) {
     console.warn("midi-qol | error deleteing concentration effects: ", err)
@@ -175,8 +185,6 @@ export function initHooks() {
   if (debugEnabled > 0) warn("Init Hooks processing");
   Hooks.on("preCreateChatMessage", (message: ChatMessage, data, options, user) => {
     if (debugEnabled > 1) debug("preCreateChatMessage entering", message, data, options, user)
-    // recalcCriticalDamage(data, options);
-    // processpreCreateBetterRollsMessage(message, data, options, user);
     nsaMessageHandler(message, data, options, user);
     return true;
   })
@@ -185,12 +193,14 @@ export function initHooks() {
     if (debugEnabled > 1) debug("Create Chat Meesage ", message.id, message, options, user)
     processCreateBetterRollsMessage(message, user);
     processItemCardCreation(message, user);
+    processCreateDDBGLMessages(message, options, user);
     return true;
   })
 
   Hooks.on("updateChatMessage", (message, update, options, user) => {
     mergeCardSoundPlayer(message, update, options, user);
     hideRollUpdate(message, update, options, user);
+    betterRollsUpdate(message, update, options, user);
     //@ts-ignore scrollBottom
     ui.chat?.scrollBottom();
   })
@@ -199,7 +209,6 @@ export function initHooks() {
     untargetAllTokens(combat, data.options, user);
     untargetDeadTokens();
     // updateReactionRounds(combat, data, options, user); This is handled in processOverTime
-    processOverTime(combat, data, options, user);
   })
 
   Hooks.on("renderChatMessage", (message, html, data) => {
@@ -227,17 +236,28 @@ export function initHooks() {
   })
   Hooks.on("applyActiveEffect", midiCustomEffect);
   Hooks.on("preCreateActiveEffect", checkImmunity);
-
-  
+  Hooks.on("preUpdateItem", preUpdateItemOnUseMacro);
   Hooks.on("renderItemSheet", (app, html, data) => {
+    const element = html.find('input[name="data.chatFlavor"]').parent().parent();
     if (configSettings.allowUseMacro) {
-      const element = html.find('input[name="data.chatFlavor"]').parent().parent();
-      const labelText = i18n("midi-qol.onUseMacroLabel");
-      const currentMacro = getProperty(app.object.data, "flags.midi-qol.onUseMacroName") ?? "";
+      const labelText = i18n("midi-qol.onUseMacroLabel");      
+      const macros = new OnUseMacros(getProperty(app.object.data, "flags.midi-qol.onUseMacroName"));
 
-      const macroField = `<div class="form-group"><label>${labelText}</label><input type="text" name="flags.midi-qol.onUseMacroName" value="${currentMacro}"/> </div>`;
+
+      const macroField = `<h4 class="damage-header">${labelText}
+  <a class="macro-control damage-control add-macro"><i class="fas fa-plus"></i></a>
+</h4>
+  <ol class="damage-parts onusemacro-group form-group">
+    ${macros.selectListOptions}
+  </ol>`;      
       element.append(macroField)
     }
+    const labelText = i18n("midi-qol.EffectActivation");
+    let currentEffectActivation = getProperty(app.object.data, "flags.midi-qol.effectActivation") ?? "";
+    const activationField = `<div class="form-group"><label>${labelText}</label><input type="checkbox" name="flags.midi-qol.effectActivation" ${currentEffectActivation ? "checked" : ""}/> </div>`;
+
+    element.append(activationField);
+
     if (installedModules.get("dfreds-convenient-effects")) {
       //@ts-ignore dfreds
       const ceForItem = game.dfreds.effects.all.find(e => e.name === app.object.name);
@@ -263,7 +283,7 @@ export function initHooks() {
       const criticalField = `<div class="form-group"><label>${labelText2}</label><div class="form-fields"><input type="text" name="flags.midi-qol.criticalThreshold" value="${criticalThreshold}"/></div></div>`;
       element2.append(criticalField);
     }
-
+    activateMacroListeners(app, html);
   })
 
   function _chatListeners(html) {
@@ -278,10 +298,10 @@ export function initHooks() {
     let grid_size = canvas.scene?.data.grid
 
     canvas.tokens?.targetObjects({
-      x: dropData.x - grid_size / 2,
-      y: dropData.y - grid_size / 2,
-      height: grid_size,
-      width: grid_size
+      x: dropData.x - grid_size! / 2,
+      y: dropData.y - grid_size! / 2,
+      height: grid_size!,
+      width: grid_size!
     });
 
     let actor: Actor | undefined | null = game.actors?.get(dropData.actorId);
@@ -529,19 +549,12 @@ export const itemJSONData = {
           "scope": "global",
           "command": `
               if (MidiQOL.configSettings().autoCheckSaves === 'none') return;
-              for (let targetData of args[0].targets) {
-                let target = canvas.tokens.get(targetData._id);
-                let concentrationLabel;
-                if (MidiQOL.configSettings().removeConcentration && (target.actor.data.data.attributes.hp.value === 0 || args[0].failedSaves.find(tData => tData._id === target.id))) {
-                  if (game.modules.get("dfreds-convenient-effects")?.active) {
-                    concentrationLabel = game.i18n.localize("midi-qol.Concentrating");
-                  } else if (game.modules.get("combat-utility-belt")?.active) {
-                    concentrationLabel = game.settings.get("combat-utility-belt", "concentratorConditionName");
-                  } else {
-                    concentrationLabel = game.i18n.localize("midi-qol.Concentrating");
-                  }
-                  const concentrationEffect = target.actor.effects.find(effect => effect.data.label === concentrationLabel)
-                  if (concentrationEffect) await concentrationEffect.delete();
+              for (let targetUuid of args[0].targetUuids) {
+                let target = await fromUuid(targetUuid);
+                if (MidiQOL.configSettings().removeConcentration 
+                  && (target.actor.data.data.attributes.hp.value === 0 || args[0].failedSaveUuids.find(uuid => uuid === targetUuid))) {
+                const concentrationEffect = MidiQOL.getConcentrationEffect(target.actor);
+                if (concentrationEffect) await concentrationEffect.delete();
                 }
               }`,
           "folder": null,
@@ -559,113 +572,5 @@ export const itemJSONData = {
       "coreVersion": "0.8.8",
       "systemVersion": "1.3.6"
     },
-    "magicitems": {
-      "enabled": false,
-      "equipped": false,
-      "attuned": false,
-      "charges": "0",
-      "chargeType": "c1",
-      "destroy": false,
-      "destroyFlavorText": "reaches 0 charges: it crumbles into ashes and is destroyed.",
-      "rechargeable": false,
-      "recharge": "0",
-      "rechargeType": "t1",
-      "rechargeUnit": "r1",
-      "sorting": "l"
-    },
-    "betterRolls5e": {
-      "quickOther": {
-        "context": "",
-        "value": true,
-        "altValue": true,
-        "type": "Boolean"
-      },
-      "critRange": {
-        "value": null,
-        "type": "String"
-      },
-      "critDamage": {
-        "value": "",
-        "type": "String"
-      },
-      "quickDesc": {
-        "value": false,
-        "altValue": false,
-        "type": "Boolean"
-      },
-      "quickSave": {
-        "value": true,
-        "altValue": true,
-        "type": "Boolean"
-      },
-      "quickProperties": {
-        "value": true,
-        "altValue": true,
-        "type": "Boolean"
-      },
-      "quickVersatile": {
-        "value": false,
-        "altValue": false,
-        "type": "Boolean"
-      },
-      "quickFlavor": {
-        "value": true,
-        "altValue": true,
-        "type": "Boolean"
-      },
-      "quickCharges": {
-        "value": {
-          "quantity": false,
-          "use": false,
-          "resource": true
-        },
-        "altValue": {
-          "quantity": false,
-          "use": false,
-          "resource": true
-        },
-        "type": "Boolean"
-      },
-      "quickAttack": {
-        "type": "Boolean",
-        "value": true,
-        "altValue": true
-      },
-      "quickDamage": {
-        "type": "Array",
-        "value": [],
-        "altValue": [],
-        "context": []
-      },
-      "quickTemplate": {
-        "type": "Boolean",
-        "value": true,
-        "altValue": true
-      },
-      "quickPrompt": {
-        "type": "Boolean",
-        "value": false,
-        "altValue": false
-      }
-    },
-    "autoanimations": {
-      "killAnim": false,
-      "override": false,
-      "animType": "t1",
-      "animName": "",
-      "color": "n1",
-      "dtvar": "dt1",
-      "explosion": false,
-      "explodeVariant": "ev1",
-      "explodeColor": "ec1",
-      "explodeRadius": "0",
-      "explodeLoop": "1",
-      "hmAnim": "a1",
-      "selfRadius": "5",
-      "animTint": "#ffffff",
-      "auraOpacity": 0.75,
-      "ctaOption": false
-    }
   }
 }
-

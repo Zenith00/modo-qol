@@ -12,14 +12,16 @@ let modules = {"about-time": "0.0",
               "combat-utility-belt": "1.3.8",
               "times-up": "0.1.2",
               "conditional-visibility": "0.0",
-              "monks-tokenbar": "0.0",
+              "monks-tokenbar": "1.0.55",
               "socketlib": "0.0",
               "advanced-macros": "1.0",
               "dnd5e-helpers":  "3.0.0",
               "dfreds-convenient-effects": "1.8.0",
               "levels": "1.7.0",
               "levelsvolumetrictemplates": "0.0.0",
-              "lib-changelogs": "0.0.0"
+              "lib-changelogs": "0.0.0",
+              "df-qol": "1.6.0",
+              "ddb-game-log": "0.0.0"
             };
 export let installedModules = new Map();
 
@@ -42,7 +44,8 @@ export let setupModules = () => {
 
 export function dice3dEnabled() {
   //@ts-ignore
-  return installedModules.get("dice-so-nice") && game.dice3d?.isEnabled();
+  // return installedModules.get("dice-so-nice") && game.dice3d?.isEnabled();
+  return installedModules.get("dice-so-nice") && (game.dice3d?.config?.enabled || game.dice3d.isEnabled());
 }
 
 export function checkModules() {
@@ -58,7 +61,7 @@ export function checkModules() {
   if (game.user?.isGM && !installedModules.get("lib-changelogs") && isNewerVersion(midiVersion, notificationVersion)) {
     game.settings.set("midi-qol", "notificationVersion", midiVersion);
     //@ts-ignore expected one argument but got 2
-    ui.notifications?.warn("midi-qol.NoChangelogs", {permanent: true, localize: true});
+    ui.notifications?.warn("midi-qol.NoChangelogs", {permanent: false, localize: true});
   }
   checkCubInstalled();
 }
@@ -88,30 +91,64 @@ export function checkCubInstalled() {
 Hooks.once('libChangelogsReady', function() {
   //@ts-ignore
   libChangelogs.register("midi-qol",`
-  0.8.81
-  * Fix for bug introduced in 0.8.80 for onUse/Damage Bonus macros where targets was not set correctly. Impacted concentration not being removed automatically.
-
-  0.8.80
-  * "full damage on save" to configure save damage for spells (like no damage on save it is always checked) - full damage on save would be used for spells that always do their damage but have contingent effects, like poisoned on a failed save.
-  * Added roll other damage for spells with the same settings as roll other damage for rwak/mwak.
-  * Fix for TrapWorkflow not targeting via templates correctly.
-  * Corrected tooltip for saving throw details when using better rolls (was always displaying 1d20).
-  * Correction to Divine Smite sample item which was incorrectly adding the bonus damage for improved divine smite.
-  * Fix for better rolls AoE spells failing if the template was placed before the damage roll completed (i.e. when dice so nice enabled).
-  * Fix for midi-qol not picking up the damage types for versatile damage rolls.
-  * Tidied up Readme.md
-
-  * Discovered, but have not fixed that if a) using better rolls, b) not using merge card and c) using dice so nice then save results won't be displayed to the chat. So if using better rolls you should enable merge card.
-
-0.8.79
-  * fix for overtime effects duplicating convenient effects when the name of the effect being checked matches a convenient effect.
-  * fix for TrapWorkflow not displaying the damage type list in the roll flavor.
-  * Add new config option to bypass the spell cast dialog, casting at default level and placing templates. Pressing both Advantage+Disadvantage keys will force display of the casting dialog. If you don't have a spell slot of the level of the spell the dialog will be displayed so you can choose another slot. 
-  * exported overTimeJSONData to help macros create items on the fly.  
-  FYI: if you want an overtime effect that just calls a macro each turn use  
-    flags.midi-qol.overTime OVERRIDE turn=start,macro=macro name, label=My Label  
-  The macro will be called with the normal onUse macro data for the overTime effect being rolled.
+  0.8.102
+  * rerelease for package problem
   
+  0.8.101
+  * Fix for change from roll -> publicroll in v9 rollmode.
+  * Fix for sculpt spell flag and better rolls.
+  * Fix for roll other damage with activation condition still applying saving throw.
+  
+  0.8.100
+  * Remove accidental debug left in
+  * Fix for incomplete lang.json files.
+
+  0.8.99
+  * Fix for Rakish Audacity and Sneak Attack sample items which break in v9 stable.
+  * Extend skip consume spell slot to cover skipping all consumption dialogs, pressing adv/dis when clicking causes the dialogs to be shown.
+  * Fix for expiring effects when actor has none. (v9 tweak I think).
+  * Removed unintentional reference to inappropriate icon from the module that shall not be named.
+
+  
+  0.8.98
+  * Support core damage numbers for all damage/healing application.
+  * Remove accidental debugger call.
+  
+  0.8.97
+  * Process flags.midi-qol.advantage..., flags.midi-qol.disadvantage.... when doing initiative rolls (dex check advantage will give initiative advantage).
+  * Fix for sneak attack and v9.
+  * Fix for v9 scrolling damage display not working with midi apply damage.
+  * 2 new onUseMacro call points, templatePlaced and preambleComplete.
+
+  0.8.96
+  * Fix for concentration save bonus being ignored. Thanks @SagaTympana#8143.
+  * Fix reactions ignoring prepared status on spells - broken in 0.8.95
+  * Remove context field from onUseMacros when using betterrolls5e
+  * Experimental "late targeting mode" for items that are NOT Template, Range or Self targeting. If auto roll attack is enabled then after you start the roll (click on the icon):
+    - token + targeting will be selected in the controls tab, 
+    - the character sheet will be minimised and midi will wait for you to target tokens.
+    - You signal that you are ready by changing the control selection to anything other than token targeting.
+    - The sheet will be restoed and the workflow continue.
+
+  0.8.95
+  * Reactions now check for resource availability and spell slot availability. (Probably some bugs in this).
+  * Added another midi-qol Hook call, Hooks.call("midi-qol.damageApplied", token, {item, workflow, damageData} => ());
+  * 
+  0.8.94
+  * Fix for empty onUseMacro field failing to allow adding onUseMacros
+  * Incapacitated actors can't take reactions
+
+  0.8.93
+  * Fix for better rolls not AoE template targeting correctly.
+  * Fix for No Damage On Save spell list failing in cyrillic alphabets.
+  * Fix for onUseMacros and tidy itemsheet5e display issues. Thanks @Seriousnes#7895
+  
+  0.8.92
+  * Fix for non english games with no translation for midi-qol failing to open config. panel.
+  * Fix for removing "missed" chat cards when not auto rolling damage.
+  * Include missing Absorb Elements Spell
+  * **BREAKING** as of 0.8.91 if using uncanny dodge from the compendium, you will need to change it's activation cost to "Reaction Damaged" or it won't function. I failed to update the compendium but will do it later. 
+
   [Full Changelog](https://gitlab.com/tposney/midi-qol/-/blob/master/Changelog.md)`,
-  "major")
+  "minor")
 })

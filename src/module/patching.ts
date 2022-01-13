@@ -1,9 +1,11 @@
 import { log, warn, debug, i18n, error, getCanvas } from "../midi-qol.js";
 import { doItemRoll, doAttackRoll, doDamageRoll, templateTokens } from "./itemhandling.js";
-import { configSettings, autoFastForwardAbilityRolls, criticalDamage } from "./settings.js";
-import { bonusDialog, expireRollEffect, getOptionalCountRemainingShortFlag, getSpeaker, testKey } from "./utils.js";
+import { configSettings, autoFastForwardAbilityRolls, criticalDamage, checkRule } from "./settings.js";
+import { bonusDialog, expireRollEffect, getOptionalCountRemainingShortFlag, getSpeaker, notificationNotify, processOverTime, testKey } from "./utils.js";
 import { installedModules } from "./setupModules.js";
-import { libWrapper } from "./lib/shim.js";
+import { OnUseMacro, OnUseMacros } from "./apps/Item.js";
+import { FlowFlags } from "typescript";
+let libWrapper;
 
 var d20Roll;
 
@@ -32,25 +34,39 @@ export const baseEvent = { shiftKey: false, altKey: false, ctrlKey: false, metaK
 
 export function mapSpeedKeys(event) {
   if (installedModules.get("betterrolls5e")) return event;
+  if (!event) return {};
+  var fastKey = false;
+  var advKey;
+  var disKey;
+  let returnEvent;
   if (configSettings.speedItemRolls && configSettings.speedAbilityRolls) {
     if (game.system.id === "sw5e") {
-      var advKey = testKey(configSettings.keyMapping["SW5E.Advantage"], event);
-      var disKey = testKey(configSettings.keyMapping["SW5E.Disadvantage"], event);
+      advKey = testKey(configSettings.keyMapping["SW5E.Advantage"], event);
+      disKey = testKey(configSettings.keyMapping["SW5E.Disadvantage"], event);
     } else {
-      var advKey = testKey(configSettings.keyMapping["DND5E.Advantage"], event);
-      var disKey = testKey(configSettings.keyMapping["DND5E.Disadvantage"], event);
+      advKey = testKey(configSettings.keyMapping["DND5E.Advantage"], event);
+      disKey = testKey(configSettings.keyMapping["DND5E.Disadvantage"], event);
     }
   } else {
-    var advKey = event?.altKey ? true : false;
-    var disKey = (event?.ctrlKey | event?.metaKey) ? true : false;
+    advKey = event?.altKey ? true : false;
+    disKey = (event?.ctrlKey | event?.metaKey) ? true : false;
+    fastKey = event?.shiftKey ? true : false;
   };
-  if (advKey && disKey)
-    event = fastforwardEvent;
-  else if (disKey) event = disadvantageEvent;
-  else if (advKey) event = advantageEvent;
+  if (advKey && disKey) {
+    fastKey = true;
+    advKey = false;
+    disKey = false;
+  }
+  if (disKey) returnEvent = disadvantageEvent;
+  else if (advKey) returnEvent = advantageEvent;
   else
-    event = baseEvent;
-  return event;
+    returnEvent = baseEvent;
+  if (fastKey || autoFastForwardAbilityRolls) {
+    returnEvent = duplicate(returnEvent);
+    if (autoFastForwardAbilityRolls) returnEvent.fastKey = !fastKey;
+    else returnEvent.fastKey = fastKey;
+  }
+  return returnEvent;
 }
 
 interface Options {
@@ -116,10 +132,10 @@ async function doRollSkill(wrapped, ...args) {
   if (newResult === result) newResult = await bonusCheck(this, result, "check");
   result = newResult;
   if (chatMessage !== false && result) {
-    const args = {"speaker": getSpeaker(this)};
+    const args = { "speaker": getSpeaker(this) };
     setProperty(args, "flags.dnd5e.roll", { type: "skill", skillId });
-    if (game.system.id === "sw5e") setProperty(args, "flags.sw5e.roll", { type: "skill", skillId})
-    result.toMessage(args);
+    if (game.system.id === "sw5e") setProperty(args, "flags.sw5e.roll", { type: "skill", skillId })
+    await result.toMessage(args);
   }
   await expireRollEffect.bind(this)("Skill", skillId);
   return result;
@@ -239,10 +255,10 @@ async function rollAbilityTest(wrapped, ...args) {
   let result = await wrapped(abilityId, procOptions);
   result = await bonusCheck(this, result, "check")
   if (chatMessage !== false && result) {
-    const args = {"speaker": getSpeaker(this)};
+    const args = { "speaker": getSpeaker(this) };
     setProperty(args, "flags.dnd5e.roll", { type: "ability", abilityId });
-    if (game.system.id === "sw5e") setProperty(args, "flags.sw5e.roll", { type: "ability", abilityId})
-    result.toMessage(args);
+    if (game.system.id === "sw5e") setProperty(args, "flags.sw5e.roll", { type: "ability", abilityId })
+    await result.toMessage(args);
   }
   await expireRollEffect.bind(this)("Check", abilityId);
   return result;
@@ -253,6 +269,7 @@ async function rollAbilitySave(wrapped, ...args) {
   if (procAutoFail(this, "save", abilityId)) {
     options.parts = ["-100"];
   }
+
   const chatMessage = options.chatMessage;
   options.event = mapSpeedKeys(options.event);
   if (options.event === advantageEvent || options.event === disadvantageEvent)
@@ -278,10 +295,10 @@ async function rollAbilitySave(wrapped, ...args) {
   let result = await wrapped(abilityId, procOptions);
   result = await bonusCheck(this, result, "save")
   if (chatMessage !== false && result) {
-    const args = {"speaker": getSpeaker(this)};
+    const args = { "speaker": getSpeaker(this) };
     setProperty(args, "flags.dnd5e.roll", { type: "save", abilityId });
-    if (game.system.id === "sw5e") setProperty(args, "flags.sw5e.roll", { type: "save", abilityId})
-    result.toMessage(args);
+    if (game.system.id === "sw5e") setProperty(args, "flags.sw5e.roll", { type: "save", abilityId })
+    await result.toMessage(args);
   }
   await expireRollEffect.bind(this)("Save", abilityId);
   return result;
@@ -323,7 +340,9 @@ function procAdvantage(actor, rollType, abilityId, options: Options): Options {
   var withAdvantage = options.event?.altKey || options.advantage;
   var withDisadvantage = options.event?.ctrlKey || options.event?.metaKey || options.disadvantage;
 
-  options.fastForward = options.fastForward || (autoFastForwardAbilityRolls ? !options.event?.fastKey : options.event?.fastKey);
+  //options.fastForward = options.fastForward || (autoFastForwardAbilityRolls ? !options.event?.fastKey : options.event?.fastKey);
+  
+  options.fastForward = options.fastForward || options.event?.fastKey;
   if (advantage.ability || advantage.all) {
     const rollFlags = (advantage.ability && advantage.ability[rollType]) ?? {};
     withAdvantage = withAdvantage || advantage.all || advantage.ability.all || rollFlags.all || rollFlags[abilityId];
@@ -357,11 +376,12 @@ function procAdvantageSkill(actor, skillId, options: Options): Options {
   return options;
 }
 
-let _midiATRefresh = debounce(__midiATIRefresh, 30);
-
-function __midiATIRefresh(template) {
+let debouncedATRefreach = debounce(_midiATIRefresh, 30);
+function _midiATIRefresh(template) {
   if (!canvas?.tokens) return;
   if (configSettings.autoTarget === "none") return;
+  if (configSettings.autoTarget === "dfqol" && installedModules.get("df-qol"))
+   return; // df-qol will handle template tagerting.
   if (installedModules.get("levelsvolumetrictemplates")) {
     // Filter which tokens to pass - not too far and not blocked by a wall.
     let distance = template.data.distance;
@@ -373,7 +393,7 @@ function __midiATIRefresh(template) {
       const r: Ray = new Ray(
         { x: template.data.x, y: template.data.y },
         { x: tk.x + tk.data.width * dimensions.size, y: tk.y + tk.data.height * dimensions.size }
-  );
+      );
       const maxExtension = (1 + Math.max(tk.data.width, tk.data.height)) * dimensions.size;
       const centerDist = r.distance;
       if (centerDist > distance + maxExtension) return false;
@@ -403,20 +423,156 @@ function __midiATIRefresh(template) {
 }
 
 function midiATRefresh(wrapped) {
-  _midiATRefresh(this);
+  debouncedATRefreach(this);
   return wrapped();
 }
 
-export function _prepareDerivedData(wrapped, ...args) {
+export function _prepareActorData(wrapped, ...args) {
   wrapped(...args);
-  const ec = 0;
+
+  if (checkRule("challengeModeArmor")) {
+    const armorDetails = this.data.data.attributes.ac ?? {};
+    const ac = armorDetails?.value ?? 10;
+    const equippedArmor = armorDetails.equippedArmor;
+    let armorAC = equippedArmor?.data.data.armor.value ?? 10;
+    const equippedShield = armorDetails.equippedShield;
+    const shieldAC = equippedShield?.data.data.armor.value ?? 0;
+
+    if (checkRule("challengeModeArrmorScale")) {
+      switch (armorDetails.calc) {
+        case 'flat':
+            armorAC = (ac.flat ?? 10) - this.data.data.abilities.dex.mod;
+          break;
+        case 'draconic': armorAC = 13; break;
+        case 'natural': armorAC = (armorDetails.value ?? 10) - this.data.data.abilities.dex.mod; break;
+        case 'custom': armorAC = equippedArmor?.data.data.armor.value ?? 10; break;
+        case 'mage': armorAC = 13; break; // perhaps this should be 10 if mage armor is magic bonus
+        case 'unarmoredMonk': armorAC = 10; break;
+        case 'unarmoredBarb': armorAC = 10; break;
+        default:
+        case 'default': armorAC = armorDetails.equippedArmor?.data.data.armor.value ?? 10; break;
+      };
+      const armorReduction = armorAC - 10 + shieldAC;
+      const ec = ac - armorReduction;
+      this.data.data.attributes.ac.EC = ec;
+      this.data.data.attributes.ac.AR = armorReduction;;
+    } else {
+      let dexMod = this.data.data.abilities.dex.mod;
+      if (equippedArmor?.data.data.armor.type === "heavy") dexMod = 0;
+      if (equippedArmor?.data.data.armor.type === "medium") dexMod = Math.min(dexMod, 2)
+      this.data.data.attributes.ac.EC = 10 + dexMod + shieldAC;
+      this.data.data.attributes.ac.AR = ac - 10 - dexMod;
+    }
+  }
 }
 
 export function initPatching() {
-  libWrapper.register("midi-qol", "CONFIG.Actor.documentClass.prototype.prepareDerivedData", _prepareDerivedData, "WRAPPER");
+  libWrapper = globalThis.libWrapper;
+  libWrapper.register("midi-qol", "CONFIG.Actor.documentClass.prototype.prepareData", _prepareActorData, "WRAPPER");
+  // For new onuse macros stuff.
+  libWrapper.register("midi-qol", "CONFIG.Item.documentClass.prototype.prepareData", _prepareItemData, "WRAPPER");
 }
+
+
+export function _prepareItemData(wrapped, ...args) {
+  wrapped(...args);
+  const macros = getProperty(this.data, 'flags.midi-qol.onUseMacroName');
+  if (macros !== undefined) setProperty(this.data, "flags.midi-qol.onUseMacroParts", new OnUseMacros(macros ?? null));
+  else setProperty(this.data, "flags.midi-qol.onUseMacroParts", new OnUseMacros(null));
+}
+
+// This can replace the ItemSheetSubmit solution when in v9 
+export function preUpdateItemOnUseMacro(item, changes, options, user) {
+  const macroParts = getProperty(changes, "flags.midi-qol.onUseMacroParts");
+  if (!macroParts) return true;
+  try {
+    const macroString = macroParts.items.map(oum => oum.toString()).join(",");
+    changes.flags["midi-qol"].onUseMacroName = macroString;
+    delete changes.flags["midi-qol"].onUseMacroParts;
+  } catch (err) {
+  }
+  return true;
+};
+
+// TODO this is not needed for v9.
+function itemSheetGetSubmitData(wrapped, ...args) {
+  let data = wrapped(...args);
+  data = expandObject(data);
+  try {
+    const macroParts: any = getProperty(data, "flags.midi-qol.onUseMacroParts");
+    if (macroParts) {
+      const macros = OnUseMacros.parseParts(macroParts)
+      delete data.flags["midi-qol"].onUseMacroParts;
+      data.flags["midi-qol"].onUseMacroName = macros.toString();
+    }
+  } catch (err) {
+    warn("onUseMacro update processing ", err)
+  } finally {
+    return flattenObject(data);
+  }
+}
+
+export function _getInitiativeFormula(wrapped) {
+  const original = wrapped();
+  const actor = this.actor;
+  let disadv = actor.getFlag(game.system.id, "iniitiativeDis");
+  let adv = actor.getFlag(game.system.id, "initiativeAdv");
+  const flags = actor.data.flags["midi-qol"];
+  if (flags && flags.advantage) {
+    adv = adv || flags.advantage.all || flags.advantage.ability?.check?.all || flags.advantage.ability?.check?.dex
+  }
+  if (flags && flags.disadvantage) {
+    disadv = disadv || flags.disadvantage.all || flags.disadvantage.ability?.check?.all || flags.disadvantage.ability?.check?.dex
+  }
+  if (!disadv && !adv) return original;
+  if ( !actor ) return "1d20";
+  const actorData = actor.data.data;
+  const init = actorData.attributes.init;
+  const rollData = actor.getRollData();
+
+  // Construct initiative formula parts
+  let nd = 1;
+  let mods = "";
+  if (game.system.id === "dnd5e" && actor.getFlag("dnd5e", "halflingLucky")) mods += "r1=1";
+  if (adv && !disadv) {
+    nd = 2;
+    mods += "kh";
+  } else if (!adv && disadv) {
+    nd = 2;
+    mods += "kl";
+  }
+  const parts = [
+    `${nd}d20${mods}`,
+    init.mod,
+    (init.prof.term !== "0") ? init.prof.term : null,
+    (init.bonus !== 0) ? init.bonus : null
+  ];
+
+  // Ability Check Bonuses
+  const dexCheckBonus = actorData.abilities.dex.bonuses?.check;
+  const globalCheckBonus = actorData.bonuses?.abilities?.check;
+  if ( dexCheckBonus ) parts.push(Roll.replaceFormulaData(dexCheckBonus, rollData));
+  if ( globalCheckBonus ) parts.push(Roll.replaceFormulaData(globalCheckBonus, rollData));
+
+  // Optionally apply Dexterity tiebreaker
+  const tiebreaker = game.settings.get("dnd5e", "initiativeDexTiebreaker");
+  if ( tiebreaker ) parts.push(actor.data.data.abilities.dex.value / 100);
+  return parts.filter(p => p !== null).join(" + ");
+};
+
 export function readyPatching() {
-  libWrapper.register("midi-qol", "game.dnd5e.canvas.AbilityTemplate.prototype.refresh", midiATRefresh, "WRAPPER")
+  // TODO remove this when v9 default
+  if (game.system.id === "dnd5e") {
+  	libWrapper.register("midi-qol", "game.dnd5e.applications.ItemSheet5e.prototype._getSubmitData", itemSheetGetSubmitData, "WRAPPER");
+  	libWrapper.register("midi-qol", "game.dnd5e.canvas.AbilityTemplate.prototype.refresh", midiATRefresh, "WRAPPER");
+  } else { // TDOD find out what itemsheet5e is called in sw5e
+  	libWrapper.register("midi-qol", "game.sw5e.applications.ItemSheet5e.prototype._getSubmitData", itemSheetGetSubmitData, "WRAPPER");
+  	libWrapper.register("midi-qol", "game.se5e.canvas.AbilityTemplate.prototype.refresh", midiATRefresh, "WRAPPER");
+  }
+  libWrapper.register("midi-qol", "CONFIG.Combat.documentClass.prototype._preUpdate", processOverTime, "WRAPPER");
+  Notifications
+  libWrapper.register("midi-qol", "Notifications.prototype.notify", notificationNotify, "MIXED");
+  libWrapper.register("midi-qol", "Combatant.prototype._getInitiativeFormula",_getInitiativeFormula, "WRAPPER");
 }
 
 export let visionPatching = () => {
@@ -440,7 +596,7 @@ export function configureDamageRollDialog() {
     else {
       libWrapper.unregister("midi-qol", "game.dnd5e.dice.DamageRoll.prototype.configureDialog");
     }
-  } catch(err) {}
+  } catch (err) { }
 }
 
 export let itemPatching = () => {
@@ -476,7 +632,7 @@ export function patchLMRTFY() {
 }
 
 function filterChatMessageCreate(wrapped, data: any, context: any) {
-  if (!(data instanceof Array) ) data = [data]
+  if (!(data instanceof Array)) data = [data]
   for (let messageData of data) {
     if (messageData.flags?.lmrtfy?.data?.disableMessage) messageData.blind = true;
   }
@@ -536,7 +692,7 @@ class CustomizeDamageFormula {
   static async configureDialog(wrapped, args) {
     // If the option is not enabled, return the original function - as an alternative register\unregister would be possible
     if (false) return wrapped(...args);
-    const {title, defaultRollMode, defaultCritical, template, allowCritical, options} = args;
+    const { title, defaultRollMode, defaultCritical, template, allowCritical, options } = args;
     // Render the Dialog inner HTML
     const content = await renderTemplate(
       //@ts-ignore
@@ -556,8 +712,8 @@ class CustomizeDamageFormula {
           content,
           buttons: {
             critical: {
-            //@ts-ignore
-            condition: allowCritical,
+              //@ts-ignore
+              condition: allowCritical,
               label: game.i18n.localize("DND5E.CriticalHit"),
               //@ts-ignore
               callback: (html) => resolve(this._onDialogSubmit(html, true)),
@@ -572,7 +728,7 @@ class CustomizeDamageFormula {
           },
           default: defaultCritical ? "critical" : "normal",
           // Inject the formula customizer - this is the only line that differs from the original
-          render: (html) => {try{CustomizeDamageFormula.injectFormulaCustomizer(this, html)}catch(e){console.error(e)}},
+          render: (html) => { try { CustomizeDamageFormula.injectFormulaCustomizer(this, html) } catch (e) { console.error(e) } },
           close: () => resolve(null),
         },
         options
@@ -586,7 +742,7 @@ class CustomizeDamageFormula {
       default: damageRoll.formula,
       versatileDamage: item.damage.versatile,
       otherDamage: item.formula,
-      parts : item.damage.parts,
+      parts: item.damage.parts,
     }
     const customizerSelect = CustomizeDamageFormula.buildSelect(damageOptions, damageRoll);
     const fg = $(html).find(`input[name="formula"]`).closest(".form-group");
@@ -594,37 +750,37 @@ class CustomizeDamageFormula {
     CustomizeDamageFormula.activateListeners(html, damageRoll);
   }
 
-  static updateFormula(damageRoll, data){
+  static updateFormula(damageRoll, data) {
     //@ts-ignore
     const newDiceRoll = new CONFIG.Dice.DamageRoll(data.formula, damageRoll.data, damageRoll.options);
     CustomizeDamageFormula.updateFlavor(damageRoll, data);
     damageRoll.terms = newDiceRoll.terms;
   }
 
-  static updateFlavor(damageRoll, data){
+  static updateFlavor(damageRoll, data) {
     const itemName = damageRoll.options.flavor.split(" - ")[0];
     const damageType = CustomizeDamageFormula.keyToText(data.damageType);
     const special = CustomizeDamageFormula.keyToText(data.key) === damageType ? "" : CustomizeDamageFormula.keyToText(data.key);
     const newFlavor = `${itemName} - ${special} ${CustomizeDamageFormula.keyToText("damageRoll")} ${damageType ? `(${damageType.replace(" - ", "")})` : ""}`;
-    Hooks.once("preCreateChatMessage", (message)=>{
-      message.data.update({flavor: newFlavor});
+    Hooks.once("preCreateChatMessage", (message) => {
+      message.data.update({ flavor: newFlavor });
     });
   }
 
-  static buildSelect(damageOptions, damageRoll){
+  static buildSelect(damageOptions, damageRoll) {
     const select = $(`<select id="customize-damage-formula"></select>`);
-    for(let [k, v] of Object.entries(damageOptions)){
-      if(k === "parts"){
+    for (let [k, v] of Object.entries(damageOptions)) {
+      if (k === "parts") {
         //@ts-ignore
-        for(let part of v){
+        for (let part of v) {
           //@ts-ignore
           const index = v.indexOf(part);
           const adjustedFormula = CustomizeDamageFormula.adjustFormula(part, damageRoll);
           select.append(CustomizeDamageFormula.createOption(part[1], part, index));
         }
-      }else{
+      } else {
         //@ts-ignore
-        if(v) select.append(CustomizeDamageFormula.createOption(k,v));
+        if (v) select.append(CustomizeDamageFormula.createOption(k, v));
       }
     }
     const fg = $(`<div class="form-group"><label>${CustomizeDamageFormula.keyToText("customizeFormula")}</label></div>`)
@@ -632,25 +788,25 @@ class CustomizeDamageFormula {
     return fg;
   }
 
-  static createOption(key, data, index){
+  static createOption(key, data, index) {
     const title = CustomizeDamageFormula.keyToText(key)
-    if(typeof data === "string"){
+    if (typeof data === "string") {
       return $(`<option data-damagetype="" data-key="${key}" data-index="" value="${data}">${title + data}</option>`);
-    }else{
+    } else {
       return $(`<option data-damagetype="${data[1]}" data-key="${key}" data-index="${index}" value="${data[0]}">${title + data[0]}</option>`);
     }
   }
 
-  static adjustFormula(part, damageRoll){
-    if(damageRoll.data.item.level){
+  static adjustFormula(part, damageRoll) {
+    if (damageRoll.data.item.level) {
       //adjust for level scaling
     }
     return part;
   }
 
-  static keyToText(key){
+  static keyToText(key) {
     //localize stuff
-    switch(key){
+    switch (key) {
       case "damageRoll":
         return "Damage Roll";
       case "customizeFormula":
@@ -665,11 +821,11 @@ class CustomizeDamageFormula {
     return key.charAt(0).toUpperCase() + key.slice(1) + " - ";
   }
 
-  static activateListeners(html, damageRoll){
+  static activateListeners(html, damageRoll) {
     $(html).find(`select[id="customize-damage-formula"]`).on("change", (e) => {
       const selected = $(e.currentTarget).find(":selected");
       $(html).find(`input[name="formula"]`).val(selected.val() + " + @bonus");
-      CustomizeDamageFormula.updateFormula(damageRoll, {formula: selected.val() + " + @bonus", key : selected.data("key"), damageType: selected.data("damagetype"), partsIndex: selected.data("index")});
+      CustomizeDamageFormula.updateFormula(damageRoll, { formula: selected.val() + " + @bonus", key: selected.data("key"), damageType: selected.data("damagetype"), partsIndex: selected.data("index") });
     })
   }
 

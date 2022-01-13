@@ -1,14 +1,12 @@
 import { warn, debug, error, i18n, MESSAGETYPES, i18nFormat, gameStats, getCanvas, debugEnabled, log } from "../midi-qol.js";
 import { BetterRollsWorkflow, defaultRollOptions, TrapWorkflow, Workflow, WORKFLOWSTATES } from "./workflow.js";
 import { configSettings, enableWorkflow, checkRule } from "./settings.js";
-import { checkRange, getAutoRollAttack, getAutoRollDamage, getConcentrationEffect, getRemoveDamageButtons, getSelfTarget, getSelfTargetSet, getSpeaker, getUnitDist, isAutoFastAttack, isAutoFastDamage, isFastForwardSpells, itemHasDamage, itemIsVersatile, playerFor, processAttackRollBonusFlags, processDamageRollBonusFlags, validTargetTokens } from "./utils.js";
+import { checkRange, computeTemplateShapeDistance, evalActivationCondition, getAutoRollAttack, getAutoRollDamage, getConcentrationEffect, getLateTargeting, getRemoveDamageButtons, getSelfTarget, getSelfTargetSet, getSpeaker, getUnitDist, isAutoFastAttack, isAutoFastDamage, isAutoConsumeResource, itemHasDamage, itemIsVersatile, playerFor, processAttackRollBonusFlags, processDamageRollBonusFlags, validTargetTokens } from "./utils.js";
 import { dice3dEnabled, installedModules } from "./setupModules.js";
-import { config } from "@league-of-foundry-developers/foundry-vtt-types/src/types/augments/simple-peer";
-import { isTemplateMiddleOrTemplateTail } from "typescript";
-import { socketlibSocket } from "./GMAction.js";
 import { mapSpeedKeys } from "./patching.js";
+import { MeasuredTemplateData } from "@league-of-foundry-developers/foundry-vtt-types/src/foundry/common/data/module.mjs";
 
-export async function doAttackRoll(wrapped, options = { event: { shiftKey: false, altKey: false, ctrlKey: false, metaKey: false }, versatile: false, resetAdvantage: false, chatMessage: undefined }) {
+export async function doAttackRoll(wrapped, options = { event: { shiftKey: false, altKey: false, ctrlKey: false, metaKey: false }, versatile: false, resetAdvantage: false, chatMessage: undefined, createWorkflow: true }) {
   let workflow: Workflow | undefined = Workflow.getWorkflow(this.uuid);
   if (debugEnabled > 1) debug("Entering item attack roll ", event, workflow, Workflow._workflows);
   if (!workflow || !enableWorkflow) { // TODO what to do with a random attack roll
@@ -34,13 +32,24 @@ export async function doAttackRoll(wrapped, options = { event: { shiftKey: false
     workflow.disadvantage = false;
     workflow.rollOptions = duplicate(defaultRollOptions);
   }
+
   workflow.processAttackEventOptions(options?.event);
   workflow.checkAttackAdvantage();
+
   workflow.rollOptions.fastForward = workflow.rollOptions.fastForwardKey ? !isAutoFastAttack(workflow) : isAutoFastAttack(workflow);
   if (!workflow.rollOptions.fastForwardKey && (workflow.rollOptions.advKey || workflow.rollOptions.disKey))
     workflow.rollOptions.fastForward = true;
   workflow.rollOptions.advantage = workflow.disadvantage ? false : workflow.advantage;
   workflow.rollOptions.disadvantage = workflow.advantage ? false : workflow.disadvantage;
+
+  if (configSettings.accelKeysOverride) {
+    options.event = mapSpeedKeys(options.event);
+    if (options.event.altKey || options.event.ctrlKey) {
+      workflow.rollOptions.advantage = options.event.altKey;
+      workflow.rollOptions.disadvantage = options.event.ctrlKey;
+    }
+  }
+
   const defaultOption = workflow.rollOptions.advantage ? "advantage" : workflow.rollOptions.disadvantage ? "disadvantage" : "normal";
   {
     //@ts-ignore
@@ -48,7 +57,6 @@ export async function doAttackRoll(wrapped, options = { event: { shiftKey: false
     //@ts-ignore
     options.disadvantage = workflow.rollOptions.disadvantage;
   }
-
   if (workflow.workflowType === "TrapWorkflow") workflow.rollOptions.fastForward = true;
   if (!Hooks.call("midi-qol.preAttackRoll", this, workflow)) {
     console.warn("midi-qol | attack roll blocked by pre hook");
@@ -140,7 +148,7 @@ export async function doDamageRoll(wrapped, { event = {}, spellLevel = null, pow
   let workflow = Workflow.getWorkflow(this.uuid);
   if (!enableWorkflow || !workflow) {
     if (!workflow && debugEnabled > 0) warn("Roll Damage: No workflow for item ", this.name);
-    return await wrapped({ event, versatile, options })
+    return await wrapped({ event, versatile, spellLevel, powerLevel, options })
   }
   const midiFlags = workflow.actor.data.flags["midi-qol"]
   if (workflow.currentState !== WORKFLOWSTATES.WAITFORDAMAGEROLL && workflow.noAutoAttack) {
@@ -208,59 +216,29 @@ export async function doDamageRoll(wrapped, { event = {}, spellLevel = null, pow
   result = await processDamageRollBonusFlags.bind(workflow)();
   let otherResult: Roll | undefined = undefined;
 
-  workflow.shouldRollOtherDamage = false;
-  if (this.data.type === "spell" &&  configSettings.rollOtherSpellDamage !== "none") {
-    workflow.shouldRollOtherDamage = (configSettings.rollOtherSpellDamage === "ifSave" && this.hasSave) 
-                                  || configSettings.rollOtherSpellDamage === "activation";
-  } else if (["rwak", "mwak"].includes(this.data.data.actionType) && configSettings.rollOtherDamage !== "none") {
-    workflow.shouldRollOtherDamage = 
-      (configSettings.rollOtherDamage === "ifSave" && this.hasSave) ||
-      //@ts-ignore DND5E
-      ((configSettings.rollOtherDamage === "activation") && (this.data.data.attunement !== CONFIG.DND5E.attunementTypes.REQUIRED));
-  }
+  workflow.shouldRollOtherDamage = shouldRollOtherDamage.bind(this)(workflow, configSettings.rollOtherDamage, configSettings.rollOtherSpellDamage);
 
-  //@ts-ignore
   if (workflow.shouldRollOtherDamage) {
-    if (configSettings.rollOtherDamage === "activation") { // check the activation condition if present
-      if ((workflow.otherDamageItem?.data.data.activation?.condition ?? "") !== "") {
-        const rollData = workflow.otherDamageItem?.getRollData();
-        rollData.target = workflow.hitTargets.values().next()?.value;
-        rollData.workflow = workflow;
-        if (rollData.target) {
-          rollData.target = rollData.target.actor.data.data;
-          if (rollData.target.details.race ?? "" !== "") rollData.raceOrType = rollData.target.details.race.toLocaleLowerCase();
-          else rollData.raceOrType = rollData.target.details.type.value.toLocaleLowerCase();
-        }
-
-        let expression = workflow.otherDamageItem?.data.data.activation?.condition;
-        expression = Roll.replaceFormulaData(expression, rollData, { missing: "0" });
-        try {
-          workflow.shouldRollOtherDamage = Roll.safeEval(expression);
-        } catch (err) { console.warn(`midi-qol | activation condition (${expression}) error `, err) }
-      }
-    }
-    if (workflow.shouldRollOtherDamage) {
-      if ((workflow.otherDamageFormula ?? "") !== "") {
-        //@ts-ignore
-        otherResult = new CONFIG.Dice.DamageRoll(workflow.otherDamageFormula, workflow.otherDamageItem?.getRollData(), { critical: (this.data.data.properties?.critOther ?? true) && workflow.isCritical });
-        otherResult = await otherResult?.evaluate({ async: true });
-        // otherResult = new Roll(workflow.otherDamageFormula, workflow.actor?.getRollData()).roll();
-      } else if (this.isVersatile && !this.data.data.properties.ver) otherResult = await wrapped({
-        // roll the versatile damage if there is a versatile damage field and the weapn is not marked versatile
-        // TODO review this is the SRD monsters change the way extra damage is represented
-        critical: this.data.data.properties.critOther && workflow.isCritical,
-        powerLevel: workflow.rollOptions.spellLevel,
-        spellLevel: workflow.rollOptions.spellLevel,
-        versatile: true,
+    if ((workflow.otherDamageFormula ?? "") !== "") {
+      //@ts-ignore
+      otherResult = new CONFIG.Dice.DamageRoll(workflow.otherDamageFormula, workflow.otherDamageItem?.getRollData(), { critical: (this.data.data.properties?.critOther ?? true) && workflow.isCritical });
+      otherResult = await otherResult?.evaluate({ async: true });
+      // otherResult = new Roll(workflow.otherDamageFormula, workflow.actor?.getRollData()).roll();
+    } else if (this.isVersatile && this.type === "weapon" && !this.data.data.properties?.ver) otherResult = await wrapped({
+      // roll the versatile damage if there is a versatile damage field and the weapn is not marked versatile
+      // TODO review this is the SRD monsters change the way extra damage is represented
+      critical: this.data.data.properties?.critOther && workflow.isCritical,
+      powerLevel: workflow.rollOptions.spellLevel,
+      spellLevel: workflow.rollOptions.spellLevel,
+      versatile: true,
+      fastForward: true,
+      event: {},
+      // "data.default": (workflow.rollOptions.critical || workflow.isCritical) ? "critical" : "normal",
+      options: {
         fastForward: true,
-        event: {},
-        // "data.default": (workflow.rollOptions.critical || workflow.isCritical) ? "critical" : "normal",
-        options: {
-          fastForward: true,
-          chatMessage: false //!configSettings.mergeCard,
-        }
-      });
-    }
+        chatMessage: false //!configSettings.mergeCard,
+      }
+    });
   }
   if (!configSettings.mergeCard) {
     let actionFlavor;
@@ -323,6 +301,37 @@ export async function doDamageRoll(wrapped, { event = {}, spellLevel = null, pow
   return result;
 }
 
+async function resolveLateTargeting(item: any) {
+  if (!getLateTargeting()) return;
+
+  // clear targets?
+
+  // enable target mode
+  const controls: any = ui.controls;
+  controls.activeControl = "token"
+  controls.controls[0].activeTool = "target"
+  await controls.render();
+
+  const wasMaximized = !(item.actor.sheet?._minimized);
+  // Hide the sheet that originated the preview
+  if (wasMaximized) await item.actor.sheet.minimize();
+
+  let targets = new Promise((resolve, reject) => {
+    // hook for exit target mode
+    const timeoutId = setTimeout(() => {
+      resolve(false);
+    }, 30000); // TODO maybe make this a config option
+    const hookId = Hooks.on("renderSceneControls", (app, html, data) => {
+      if (app.activeControl === "token" && data.controls[0].activeTool === "target") return;
+      Hooks.off("renderSceneControls", hookId)
+      clearTimeout(timeoutId)
+      resolve(true);
+    });
+  });
+  await targets;
+  if (wasMaximized) await item.actor.sheet.maximize()
+}
+
 export async function doItemRoll(wrapped, options = { showFullCard: false, createWorkflow: true, versatile: false, configureDialog: true, createMessage: undefined, event }) {
   let showFullCard = options?.showFullCard ?? false;
   let createWorkflow = options?.createWorkflow ?? true;
@@ -333,8 +342,24 @@ export async function doItemRoll(wrapped, options = { showFullCard: false, creat
   }
   const isRangeSpell = ["ft", "m"].includes(this.data.data.target?.units) && ["creature", "ally", "enemy"].includes(this.data.data.target?.type);
   const isAoESpell = this.hasAreaTarget;
-  const myTargets = game.user?.targets && await validTargetTokens(game.user?.targets);
   const requiresTargets = configSettings.requiresTargets === "always" || (configSettings.requiresTargets === "combat" && game.combat);
+  if (getLateTargeting() && !isRangeSpell && !isAoESpell && getAutoRollAttack()) {
+    // normal targeting and auto rolling attack so allow late targeting
+    let canDoLateTargeting = this.data.data.target.type !== "self";
+
+    // TODO look at this if AoE spell and not auto targeting need to work out how to deal with template placement
+    if (false && isAoESpell && configSettings.autoTarget === "none" && this.hasAreaTarget)
+      canDoLateTargeting = true;
+
+    // TODO look at this if range spell and not auto targeting
+    const targetDetails = this.data.data.target;
+    if (false && configSettings.rangeTarget === "none" && ["ft", "m"].includes(targetDetails?.units) && ["creature", "ally", "enemy"].includes(targetDetails?.type))
+      canDoLateTargeting = true;
+    // TODO consider template and range spells when not template targeting?
+
+    if (canDoLateTargeting) await resolveLateTargeting(this);
+  }
+  const myTargets = game.user?.targets && await validTargetTokens(game.user?.targets);
   let shouldAllowRoll = !requiresTargets // we don't care about targets
     || ((myTargets?.size || 0) > 0) // there are some target selected
     || (this.data.data.target?.type === "self") // self target
@@ -381,7 +406,7 @@ export async function doItemRoll(wrapped, options = { showFullCard: false, creat
       return null;
     }
   }
-  const needsConcentration = this.data.data.components?.concentration || this.data.data.activation?.condition?.includes("Concentration");
+  const needsConcentration = this.data.data.components?.concentration || this.data.data.activation?.condition?.toLocaleLowerCase().includes(i18n("midi-qol.concentrationActivationCondition").toLocaleLowerCase());
   const checkConcentration = configSettings.concentrationAutomation; // installedModules.get("combat-utility-belt") && configSettings.concentrationAutomation;
   if (needsConcentration && checkConcentration) {
     const concentrationEffect = getConcentrationEffect(this.actor);
@@ -428,20 +453,23 @@ export async function doItemRoll(wrapped, options = { showFullCard: false, creat
   }
 
   if (configureDialog) {
-    if (this.type === "spell" && isFastForwardSpells() && !mapSpeedKeys(event).fastKey) {
-      configureDialog = false;
-      // Check that there is a spell slot of the right level
-      const spells = this.actor.data.data.spells;
-      if (spells[`spell${this.data.data.level}`]?.value === 0 &&
-        (spells.pact.value === 0 || spells.pact.level < this.data.data.level)) {
-        configureDialog = true;
+    if (this.type === "spell") {
+      if (isAutoConsumeResource() && !mapSpeedKeys(event).fastKey) {
+        configureDialog = false;
+        // Check that there is a spell slot of the right level
+        const spells = this.actor.data.data.spells;
+        if (spells[`spell${this.data.data.level}`]?.value === 0 &&
+          (spells.pact.value === 0 || spells.pact.level < this.data.data.level)) {
+          configureDialog = true;
+        }
+
+        if (!configureDialog && this.hasAreaTarget && this.actor?.sheet) {
+          setTimeout(() => {
+            this.actor?.sheet.minimize();
+          }, 100)
+        }
       }
-    }
-    if (!configureDialog && this.hasAreaTarget && this.actor?.sheet) {
-      setTimeout(() => {
-        this.actor?.sheet.minimize();
-      }, 100)
-    }
+    } else configureDialog = !isAutoConsumeResource();
   }
 
   let result = await wrapped({ configureDialog, rollMode: null, createMessage: false });
@@ -613,6 +641,7 @@ export async function showItemCard(showFullCard: boolean, workflow: Workflow, mi
       "core": { "canPopout": true }
     }
   };
+  if (workflow.flagTags) chatData.flags = mergeObject(chatData.flags ?? "", workflow.flagTags);
   if (!this.actor.items.has(this.id)) { // deals with using temp items in overtime effects
     chatData.flags["dnd5e.itemData"] = this.data;
   }
@@ -640,8 +669,8 @@ function isTokenInside(templateDetails: { x: number, y: number, shape: any, dist
   for (let x = startX; x < token.data.width; x++) {
     for (let y = startY; y < token.data.height; y++) {
       const currGrid = {
-        x: token.data.x + x * grid - templatePos.x,
-        y: token.data.y + y * grid - templatePos.y,
+        x: token.data.x + x * grid! - templatePos.x,
+        y: token.data.y + y * grid! - templatePos.y,
       };
       let contains = templateDetails.shape?.contains(currGrid.x, currGrid.y);
       if (contains && wallsBlockTargeting) {
@@ -650,11 +679,13 @@ function isTokenInside(templateDetails: { x: number, y: number, shape: any, dist
         if (templateDetails.shape.type === 1) { // A rectangle
           tx = tx + templateDetails.shape.width / 2;
           ty = ty + templateDetails.shape.height / 2;
+
         }
-        const r = new Ray({ x: tx, y: ty }, { x: currGrid.x + tx, y: currGrid.y + ty });
+        const r = new Ray({ x: tx, y: ty }, { x: currGrid.x + templatePos.x, y: currGrid.y + templatePos.y });
+
         if (configSettings.optionalRules.wallsBlockRange === "centerLevels" && installedModules.get("levels")) {
           let p1 = {
-            x: currGrid.x + tx, y: currGrid.y + ty,
+            x: currGrid.x + templatePos.x, y: currGrid.y + templatePos.y,
             //@ts-ignore
             z: token.data.elevation
           }
@@ -678,27 +709,42 @@ function isTokenInside(templateDetails: { x: number, y: number, shape: any, dist
   return false;
 }
 
-export function templateTokens(templateDetails: { x: number, y: number, shape: any, distance: number }) {
-  if (configSettings.autoTarget === "none") return;
+export function templateTokens(templateDetails: { x: number, y: number, shape: any, distance: number }): Token[] {
+  if (configSettings.autoTarget === "none") return [];
   const wallsBlockTargeting = ["wallsBlock", "wallsBlockIgnoreDefeated"].includes(configSettings.autoTarget);
   const tokens = getCanvas().tokens?.placeables || []; //.map(t=>t.data)
   let targets: string[] = [];
+  const targetTokens: Token[] = [];
   for (const token of tokens) {
     if (token.actor && isTokenInside(templateDetails, token, wallsBlockTargeting)) {
       const actorData: any = token.actor?.data;
       if (actorData?.data.details.type?.custom === "NoTarget") continue;
       if (["wallsBlock", "always"].includes(configSettings.autoTarget) || actorData?.data.attributes.hp.value > 0) {
-        if (token.document.id) targets.push(token.document.id);
+        if (token.document.id) {
+          targetTokens.push(token);
+          targets.push(token.document.id);
+        }
       }
     }
   }
   game.user?.updateTokenTargets(targets);
   game.user?.broadcastActivity({ targets });
+  return targetTokens;
 }
+
 
 export function selectTargets(templateDocument: MeasuredTemplateDocument, data, user) {
   if (user !== game.user?.id) {
     return true;
+  }
+  if (game.user?.targets.size === 0 && templateDocument?.object) {
+    //@ts-ignore
+    const mTemplate: MeasuredTemplate = templateDocument.object;
+    if (mTemplate.shape) templateTokens({ x: templateDocument.data.x, y: templateDocument.data.y, shape: mTemplate.shape, distance: mTemplate.data.distance })
+    else {
+      let { shape, distance } = computeTemplateShapeDistance(templateDocument)
+      templateTokens({ x: templateDocument.data.x, y: templateDocument.data.y, shape, distance });
+    }
   }
   let item = this?.item;
   let targeting = configSettings.autoTarget;
@@ -748,3 +794,27 @@ export function advDisadvAttribution(actor) {
   return attributions;
 }
 
+export function shouldRollOtherDamage(workflow: Workflow, conditionFlagWeapon: string, conditionFlagSpell: string) {
+  let rollOtherDamage = false;
+  let conditionToUse: string | undefined = undefined;
+  let conditionFlagToUse: string | undefined = undefined;
+  if (this.data.type === "spell" && conditionFlagSpell !== "none") {
+    rollOtherDamage = (conditionFlagSpell === "ifSave" && this.hasSave)
+      || conditionFlagSpell === "activation";
+    conditionFlagToUse = conditionFlagSpell;
+    conditionToUse = workflow.otherDamageItem?.data.data.activation?.condition
+  } else if (["rwak", "mwak"].includes(this.data.data.actionType) && conditionFlagWeapon !== "none") {
+    rollOtherDamage =
+      (conditionFlagWeapon === "ifSave" && this.hasSave) ||
+      //@ts-ignore DND5E
+      ((conditionFlagWeapon === "activation") && (this.data.data.attunement !== CONFIG.DND5E.attunementTypes.REQUIRED));
+    conditionFlagToUse = conditionFlagWeapon;
+    conditionToUse = workflow.otherDamageItem?.data.data.activation?.condition
+  }
+
+  //@ts-ignore
+  if (rollOtherDamage && conditionFlagToUse === "activation") {
+    rollOtherDamage = evalActivationCondition(workflow, conditionToUse)
+  }
+  return rollOtherDamage;
+}

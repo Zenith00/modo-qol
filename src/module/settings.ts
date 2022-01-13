@@ -1,10 +1,10 @@
 import { MacroData } from "@league-of-foundry-developers/foundry-vtt-types/src/foundry/common/data/data.mjs";
 import { _mergeUpdate } from "@league-of-foundry-developers/foundry-vtt-types/src/foundry/common/utils/helpers.mjs";
 import { config } from "simple-peer";
-import { debug, setDebugLevel, warn, i18n, checkConcentrationSettings, debugEnabled } from "../midi-qol.js";
+import { debug, setDebugLevel, warn, i18n, checkConcentrationSettings, debugEnabled, geti18nTranslations } from "../midi-qol.js";
 import { ConfigPanel} from "./apps/ConfigPanel.js"
 import { configureDamageRollDialog } from "./patching.js";
-import { isAutoFastAttack } from "./utils.js";
+import { isAutoFastAttack, reportMidiCriticalFlags } from "./utils.js";
 
 export var itemRollButtons: boolean;
 export var criticalDamage: string;
@@ -31,9 +31,11 @@ const defaultKeyMapping = {
 class ConfigSettings {
   gmAutoAttack: boolean = false;
   gmAutoFastForwardAttack: boolean = false;
+  gmLateTargeting: boolean = false;
+  lateTargeting: boolean = false;
   gmAutoDamage: string = "none";
   gmAutoFastForwardDamage: boolean =  false;
-  gmFastForwardSpells = false;
+  gmConsumeResource = false;
   gmHide3dDice: boolean = false;
   ghostRolls: boolean = false;
   speedItemRolls: boolean = false;
@@ -42,7 +44,7 @@ class ConfigSettings {
   itemTypeList: any = null;
   autoRollAttack: boolean = false;
   autoFastForward: string = "off";
-  fastForwardSpells: boolean = false;
+  consumeResource: boolean = false;
   autoTarget: string = "none";
   autoCheckHit: string = "none";
   autoCheckSaves: string = "none";
@@ -62,6 +64,7 @@ class ConfigSettings {
   reactionTimeout: number = 10;
   gmDoReactions: string = "all";
   doReactions: string = "all";
+  showReactionChatMessage: boolean = false;
   showReactionAttackRoll: string = "all";
   rollNPCSaves: string = "auto";
   rollNPCLinkedSaves: string = "auto";
@@ -92,6 +95,9 @@ class ConfigSettings {
   itemRollStartWorkflow: boolean = false;
   usePlayerPortrait: boolean = false;
   promptDamageRoll: boolean = false;
+  accelKeysOverride: boolean = false;
+  effectActivation: boolean = false;
+  enableddbGL: boolean = false;
   optionalRules: any = {
     invisAdvantage: true,
     checkRange: true,
@@ -103,7 +109,8 @@ class ConfigSettings {
     maxDRValue: false,
     distanceIncludesHeight: false,
     criticalSaves: false,
-    activeDefence: false
+    activeDefence: false,
+    challengModeArmor: false
   };
   keepRollStats: boolean = false;
   saveStatsEvery: number = 20;
@@ -207,6 +214,7 @@ export let fetchParams = () => {
   if (!configSettings.doReactions) configSettings.doReactions = "none";
   if (!configSettings.gmDoReactions) configSettings.gmDoReactions = "none";
   if (configSettings.reactionTimeout === undefined) configSettings.reactionTimeout = 0;
+  if (typeof configSettings.rangeTarget !== "string") configSettings.rangeTarget = "none";
   if (!configSettings.showReactionAttackRoll === undefined) configSettings.showReactionAttackRoll = "all";
   // deal with change of type of rollOtherDamage
   if (configSettings.rollOtherDamage === false) configSettings.rollOtherDamage = "none";
@@ -216,8 +224,13 @@ export let fetchParams = () => {
   if (configSettings.promptDamageRoll === undefined) configSettings.promptDamageRoll = false;
   if (configSettings.gmHide3dDice === undefined) configSettings.gmHide3dDice = false;
   if (configSettings.ghostRolls === undefined) configSettings.ghostRolls = false;
-  if (configSettings.gmFastForwardSpells === undefined) configSettings.gmFastForwardSpells = false;
-  if (configSettings.fastForwardSpells === undefined) configSettings.fastForwardSpells = false;
+  if (configSettings.gmConsumeResource === undefined) configSettings.gmConsumeResource = false;
+  if (configSettings.consumeResource === undefined) configSettings.consumeResource = false;
+  if (configSettings.accelKeysOverride === undefined) configSettings.accelKeysOverride = false;
+  if (!configSettings.enableddbGL) configSettings.enableddbGL = false;
+  if (!configSettings.showReactionChatMessage) configSettings.showReactionChatMessage = false;
+  if (!configSettings.gmLateTargeting) configSettings.gmLateTargeting = false; // TODO fix this
+  if (!configSettings.lateTargeting) configSettings.lateTargeting = false; // TODO fix this
 
   if (!configSettings.keyMapping 
     || !configSettings.keyMapping["DND5E.Advantage"] 
@@ -239,7 +252,9 @@ export let fetchParams = () => {
       maxDRValue: false,
       distanceIncludesHeight: false,
       criticalSaves: false,
-      activeDefence: false
+      activeDefence: false,
+      challengeModeArmor: false,
+      challengeModeArmorScale: false
     }
   }
   if (!configSettings.optionalRules.wallsBlockRange) configSettings.optionalRules.wallsBlockRange = "center";
@@ -248,7 +263,6 @@ export let fetchParams = () => {
       configSettings.optionalRules.nearbyFoe = 5;
     else
       configSettings.optionalRules.nearbyFoe = 0;
-
   }
   configSettings.itemRollStartWorkflow = false;
   const itemList = Object.keys(CONFIG.Item.typeLabels);
@@ -261,6 +275,7 @@ export let fetchParams = () => {
   if (debugEnabled > 0) warn("Fetch Params Loading", configSettings);
   
   criticalDamage = String(game.settings.get("midi-qol", "CriticalDamage"));
+  if (criticalDamage === "none") criticalDamage = "default";
   itemDeleteCheck = Boolean(game.settings.get("midi-qol", "ItemDeleteCheck"));
   nsaFlag = Boolean(game.settings.get("midi-qol", "showGM"));
   coloredBorders = String(game.settings.get("midi-qol", "ColoredBorders"));
@@ -364,18 +379,21 @@ const settings = [
   }
 ];
 export function registerSetupSettings() {
+  const translations = geti18nTranslations();
+
   game.settings.register("midi-qol","CriticalDamage", {
     name: "midi-qol.CriticalDamage.Name",
     hint: "midi-qol.CriticalDamage.Hint",
     scope: "world",
-    default: "none",
+    default: "default",
     type: String,
     config: true,
-    choices: Object(i18n("midi-qol.CriticalDamageChoices")),
+    choices: translations["CriticalDamageChoices"],
     onChange: fetchParams
   });
 }
 export const registerSettings = function() {
+  const translations = geti18nTranslations();
   // Register any custom module settings here
   settings.forEach((setting, i) => {
     let MODULE = "midi-qol"
@@ -400,7 +418,7 @@ export const registerSettings = function() {
     default: "none",
     type: String,
     config: true,
-    choices: Object(i18n("midi-qol.CriticalDamageChoices")),
+    choices: translations["CriticalDamageChoices"],
     onChange: fetchParams
   });
 
@@ -411,7 +429,7 @@ export const registerSettings = function() {
     default: "none",
     type: String,
     config: true,
-    choices: Object(i18n("midi-qol.AddChatDamageButtonsOptions")),
+    choices: translations["AddChatDamageButtonsOptions"],
     onChange: fetchParams
   });
 
@@ -423,7 +441,7 @@ export const registerSettings = function() {
     default: "None",
     type: String,
     config: true,
-    choices: Object(i18n("midi-qol.ColoredBordersOptions")),
+    choices: translations["ColoredBordersOptions"],
     onChange: fetchParams
   });
 
@@ -434,7 +452,7 @@ export const registerSettings = function() {
     default: "dead",
     type: String,
     config: true,
-    choices: Object(i18n("midi-qol.AutoRemoveTargetsOptions")),
+    choices: translations["AutoRemoveTargetsOptions"],
     onChange: fetchParams
   });
 
@@ -466,7 +484,7 @@ export const registerSettings = function() {
     default: "None",
     type: String,
     config: true,
-    choices: Object(i18n("midi-qol.DebugOptions")),
+    choices: translations["DebugOptions"],
     onChange: fetchParams
   });
 
