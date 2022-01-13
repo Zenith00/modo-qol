@@ -943,7 +943,7 @@ Hellish Rebuke, for example, has "Which you take in response to being **damaged*
 
 ### 0.8.82
 * Fix for better rolls and merge card throwing an error.
-
+a
 ### 0.8.81
 * Fix for bug introduced in 0.8.80 for onUse/Damage Bonus macros where targets was not set correctly. Impacted concentration not being removed automatically.
 * Added localisation support for Critical Damage Options and Debug Options
