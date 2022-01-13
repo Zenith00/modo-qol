@@ -407,3 +407,6 @@ function setupMidiFlags() {
     window.DAE.addAutoFields(midiFlags);
   }
 }
+
+
+console.log("midi AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");

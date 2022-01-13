@@ -1,9 +1,9 @@
 {
-  "name": "modo-qol",
-  "title": "modo-qol",
+  "name": "midi-qol",
+  "title": "midi-qol",
   "description": "midi-qol but shitty",
   "system": ["dnd5e", "sw5e"],
-  "version": "1.1",
+  "version": "1.1.1",
   "author": "tposney, zenith",
   "socket": true,
   "scripts": [],

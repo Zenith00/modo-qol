@@ -161,25 +161,25 @@ function configureDamage(wrapped) {
       let cb = (this.options.criticalBonusDice && (i === 0)) ? this.options.criticalBonusDice : 0;
       // {default: "DND5e default", maxDamage:  "base max only", maxCrit: "max critical dice", maxAll: "max all dice", doubleDice: "double dice value"},
       switch (criticalDamage) {
-        case "maxDamage":
-          term.modifiers.push(`min${term.faces}`)
-          cm = 1;
-          flatBonus = 0;
-          break;
-        case "maxCrit":
-          flatBonus += (term.number + cb) * term.faces;
-          cm = Math.max(1, cm - 1);
-          term.alter(cm, 0);
-          break;
-        case "maxAll":
-          term.modifiers.push(`min${term.faces}`);
-          term.alter(cm, cb);
-          flatBonus = 0;
-          break;
-        case "doubleDice":
-          cm = 1;
-          break;
-        default: break;
+        // case "maxDamage":
+        //   term.modifiers.push(`min${term.faces}`)
+        //   cm = 1;
+        //   flatBonus = 0;
+        //   break;
+        // case "maxCrit":
+        //   flatBonus += (term.number + cb) * term.faces;
+        //   cm = Math.max(1, cm - 1);
+        //   term.alter(cm, 0);
+        //   break;
+        // case "maxAll":
+        //   term.modifiers.push(`min${term.faces}`);
+        //   term.alter(cm, cb);
+        //   flatBonus = 0;
+        //   break;
+        // case "doubleDice":
+        //   cm = 1;
+        //   break;
+        // default: break;
       }
       termOptions.critical = true;
     }
