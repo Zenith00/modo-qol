@@ -1,9 +1,9 @@
 {
-  "name": "modo-qol",
-  "title": "modo-qol",
+  "name": "midi-qol",
+  "title": "midi-qol",
   "description": "midi-qol but shitty",
   "system": ["dnd5e", "sw5e"],
-  "version": "1.1",
+  "version": "1.1.1",
   "author": "tposney, zenith",
   "socket": true,
   "scripts": [],
@@ -24,8 +24,9 @@
       "label": "MidiQOL Sample Items",
       "path": "./packs/sampleitems.db",
       "module": "world",
-      "type": "Item",
-      "lang": ["en", "de"]
+      "entity": "Item",
+      "lang": ["en", "de"],
+      "system":"dnd5e"
     }
   ],
   "languages": [
@@ -70,14 +71,10 @@
           "path": "lang/it.json"
       }
   ],
-  "minimumCoreVersion": "9",
+  "minimumCoreVersion": "0.8.4",
   "compatibleCoreVersion": "9",
-  "compatibility": {
-    "minimum": 9,
-    "verified": 9,
-    "maximum": 9
-  },
-  "bugs": "https://gitlab.com/tposney/midi-qol/-/issues",
+  "minimumSystemVersion": "1.3.2",
+  "bugs": "https://github.com/Zenith00/modo-qol",
   "flags": {
     "allowBugReporter": true
   },
