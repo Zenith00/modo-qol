@@ -1588,16 +1588,16 @@ export class Workflow {
         flags: { "midi-qol": { type: MESSAGETYPES.SAVES, waitForDiceSoNice: waitForDSN } }
       };
 
-      const rollMode = game.settings.get("core", "rollMode");
-      if (configSettings.autoCheckSaves === "whisper" || whisper || !(["roll", "publicroll"].includes(rollMode))) {
-        chatData.whisper = ChatMessage.getWhisperRecipients("GM").filter(u => u.active);
-        chatData.messageData.user = game.user?.id; // ChatMessage.getWhisperRecipients("GM").find(u => u.active);
-        if (rollMode === "blindroll") {
-          chatData["blind"] = true;
-        }
-
-        if (debugEnabled > 1) debug("Trying to whisper message", chatData)
-      }
+      // const rollMode = game.settings.get("core", "rollMode");
+      // if (configSettings.autoCheckSaves ===d "whisper" || whisper || !(["roll", "publicroll"].includes(rollMode))) {
+      //   chatData.whisper = ChatMessage.getWhisperRecipients("GM").filter(u => u.active);
+      //   chatData.messageData.user = game.user?.id; // ChatMessage.getWhisperRecipients("GM").find(u => u.active);
+      //   if (rollMode === "blindroll") {
+      //     chatData["blind"] = true;
+      //   }
+      //
+      //   if (debugEnabled > 1) debug("Trying to whisper message", chatData)
+      // }
       if (this.flagTags) chatData.flags = mergeObject(chatData.flags ?? {}, this.flagTags);
       await ChatMessage.create(chatData);
       // Non GMS don't have permission to create the message so hand it off to a gm client
@@ -2388,7 +2388,7 @@ export class TrapWorkflow extends Workflow {
     if (!this.event) this.event = duplicate(shiftOnlyEvent);
     this.trapSound = trapSound;
     this.templateLocation = templateLocation;
-    // this.saveTargets = game.user.targets; 
+    // this.saveTargets = game.user.targets;
     this.rollOptions.fastForward = true;
     this.kickStart = false;
     this.next(WORKFLOWSTATES.NONE)
@@ -2570,7 +2570,7 @@ export class BetterRollsWorkflow extends Workflow {
     if (this.needTemplate) this.placeTemlateHookId = Hooks.once("createMeasuredTemplate", selectTargets.bind(this));
   }
   /**
-   * Retrieves the BetterRolls CustomItemRoll object from the related chat message 
+   * Retrieves the BetterRolls CustomItemRoll object from the related chat message
    */
   get roll() {
     if (this._roll) return this._roll;
@@ -2795,10 +2795,10 @@ export class DDBGameLogWorkflow extends Workflow {
                   }
                   setProperty(messageData, "flags.dnd5e.roll.type", "damage");
                   if (game.system.id === "sw5e") setProperty(messageData, "flags.sw5e.roll.type", "damage");
-        
+
                   //  Not required as we pick up the damage from the better rolls data this.otherDamageRoll.toMessage(messageData);
                   this.otherDamageDetail = createDamageList({roll: this.otherDamageRoll, item: null, versatile: false, defaultType: ""});
-        
+
                 } else this.otherDamageDetail = [];
             */
         this.otherDamageDetail = [];
