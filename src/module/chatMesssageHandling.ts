@@ -406,18 +406,18 @@ export let hideStuffHandler = (message, html, data) => {
 
   // Hide saving throw tool tips to non-gms
   if (!game.user?.isGM) {
-    html.find(".midi-qol-save-tooltip").hide();
-    if (configSettings.autoCheckSaves === "allNoRoll")
-      html.find(".midi-qol-save-total").hide();
+    // html.find(".midi-qol-save-tooltip").hide();
+    // if (configSettings.autoCheckSaves === "allNoRoll")
+    //   html.find(".midi-qol-save-total").hide();
   }
   // Hide saving throws if not rolled by me.
-  if (!game.user?.isGM && ["all", "whisper", "allNoRoll"].includes(configSettings.autoCheckSaves) && message.isRoll &&
-    (message.data.flavor?.includes(i18n("DND5E.ActionSave")) || message.data.flavor?.includes(i18n("DND5E.ActionAbil")))) {
-    if (game.user?.id !== message.user.id) {
-      html.hide();
-      return;
-    }
-  }
+  // if (!game.user?.isGM && ["all", "whisper", "allNoRoll"].includes(configSettings.autoCheckSaves) && message.isRoll &&
+  //   (message.data.flavor?.includes(i18n("DND5E.ActionSave")) || message.data.flavor?.includes(i18n("DND5E.ActionAbil")))) {
+  //   if (game.user?.id !== message.user.id) {
+  //     html.hide();
+  //     return;
+  //   }
+  // }
 
   if (game.user?.isGM && $(html).find(".midi-qol-hits-display").length) {
     if (configSettings.mergeCard) {
